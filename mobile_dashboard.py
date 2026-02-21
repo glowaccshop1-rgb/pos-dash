@@ -96,13 +96,37 @@ def get_inventory_data():
         df['selling_price'] = pd.to_numeric(df['selling_price'])
     return df
 
+def get_user_sessions():
+    if not supabase: return pd.DataFrame()
+    try:
+        response = supabase.table('user_sessions').select("*").order('login_time', desc=True).limit(100).execute()
+        df = pd.DataFrame(response.data)
+        if not df.empty:
+            df['login_time'] = pd.to_datetime(df['login_time'])
+            if 'logout_time' in df.columns:
+                df['logout_time'] = pd.to_datetime(df['logout_time'])
+        return df
+    except Exception as e:
+        return pd.DataFrame()
+
+def get_cash_discrepancies():
+    if not supabase: return pd.DataFrame()
+    try:
+        response = supabase.table('cash_discrepancies').select("*").order('timestamp', desc=True).limit(50).execute()
+        df = pd.DataFrame(response.data)
+        if not df.empty:
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+        return df
+    except Exception as e:
+        return pd.DataFrame()
+
 # --- الواجهة الرئيسية ---
 st.title("📱 متابعة حركة الفروع والمخزون")
 st.markdown("---")
 
 # القائمة الجانبية
 st.sidebar.button("تسجيل الخروج", on_click=logout)
-sidebar_option = st.sidebar.radio("القائمة", ["ملخص المبيعات", "حالة المخزون", "حركة الفروع"])
+sidebar_option = st.sidebar.radio("القائمة", ["ملخص المبيعات", "حالة المخزون", "حركة الفروع", "نشاط المستخدمين", "تنبيهات الخزينة"])
 
 if sidebar_option == "ملخص المبيعات":
     st.header("💰 ملخص المبيعات")
@@ -167,3 +191,82 @@ elif sidebar_option == "حركة الفروع":
         st.table(branch_sales)
     else:
         st.warning("لا توجد بيانات كافية لتحليل الفروع.")
+
+elif sidebar_option == "نشاط المستخدمين":
+    st.header("👥 نشاط المستخدمين")
+    if st.button("تحديث النشاط 🔄"):
+        st.cache_data.clear()
+    
+    df_sessions = get_user_sessions()
+    
+    if not df_sessions.empty:
+        # تنسيق العرض
+        display_df = df_sessions.copy()
+        
+        # تنسيق التواريخ للعرض
+        if 'login_time' in display_df.columns:
+            display_df['login_time'] = display_df['login_time'].dt.strftime('%Y-%m-%d %H:%M:%S')
+        
+        if 'logout_time' in display_df.columns:
+            display_df['logout_time'] = display_df['logout_time'].dt.strftime('%Y-%m-%d %H:%M:%S').fillna('نشط الآن')
+        else:
+            display_df['logout_time'] = 'نشط الآن'
+        
+        # إعادة تسمية الأعمدة للعربية
+        rename_map = {
+            'username': 'المستخدم',
+            'login_time': 'وقت الدخول',
+            'logout_time': 'وقت الخروج',
+            'branch_name': 'الفرع'
+        }
+        display_df = display_df.rename(columns=rename_map)
+        
+        # اختيار الأعمدة للعرض
+        cols_to_show = ['المستخدم', 'الفرع', 'وقت الدخول', 'وقت الخروج']
+        cols_to_show = [c for c in cols_to_show if c in display_df.columns]
+        
+        st.dataframe(display_df[cols_to_show], use_container_width=True)
+        
+        # إحصائيات سريعة
+        if 'وقت الخروج' in display_df.columns:
+             active_users = display_df[display_df['وقت الخروج'] == 'نشط الآن'].shape[0]
+             st.metric("المستخدمين النشطين حالياً", active_users)
+        
+    else:
+        st.info("لا توجد سجلات نشاط للمستخدمين.")
+
+elif sidebar_option == "تنبيهات الخزينة":
+    st.header("🚨 تنبيهات عجز/زيادة الخزينة")
+    if st.button("تحديث التنبيهات 🔄"):
+        st.cache_data.clear()
+    
+    df_alerts = get_cash_discrepancies()
+    
+    if not df_alerts.empty:
+        # تنسيق العرض
+        display_df = df_alerts.copy()
+        display_df['timestamp'] = display_df['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
+        
+        # إعادة تسمية الأعمدة للعربية
+        rename_map = {
+            'username': 'المستخدم',
+            'branch_name': 'الفرع',
+            'timestamp': 'الوقت',
+            'calculated_balance': 'الرصيد المتوقع',
+            'actual_balance': 'الرصيد الفعلي',
+            'difference': 'الفرق'
+        }
+        display_df = display_df.rename(columns=rename_map)
+        
+        # إضافة عمود الحالة (زيادة/عجز)
+        def get_status(diff):
+            if diff > 0: return "زيادة 🟢"
+            elif diff < 0: return "عجز 🔴"
+            return "متطابق"
+        
+        display_df['الحالة'] = display_df['الفرق'].apply(get_status)
+        
+        cols = ['المستخدم', 'الفرع', 'الوقت', 'الرصيد المتوقع', 'الرصيد الفعلي', 'الفرق', 'الحالة']
+        st.dataframe(display_df[cols], use_container_width=True)
+    else:
+        st.success("لا توجد تنبيهات عجز أو زيادة مسجلة.")
