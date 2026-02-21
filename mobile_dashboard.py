@@ -62,10 +62,9 @@ if not SUPABASE_KEY:
 
 # تنظيف البيانات من المسافات والأحرف غير الصالحة
 if SUPABASE_URL:
-    SUPABASE_URL = re.sub(r'[^\x00-\x7F]+', '', str(SUPABASE_URL)).strip()
+    SUPABASE_URL = str(SUPABASE_URL).encode('ascii', 'ignore').decode('ascii').strip()
 if SUPABASE_KEY:
-    # إزالة أي أحرف غير ASCII (مثل الأحرف العربية أو الرموز المخفية) التي قد تسبب UnicodeEncodeError
-    SUPABASE_KEY = re.sub(r'[^\x00-\x7F]+', '', str(SUPABASE_KEY)).strip()
+    SUPABASE_KEY = str(SUPABASE_KEY).encode('ascii', 'ignore').decode('ascii').strip()
 
 @st.cache_resource
 def init_connection():
