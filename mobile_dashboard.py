@@ -51,8 +51,19 @@ try:
     SUPABASE_URL = st.secrets["supabase"]["url"]
     SUPABASE_KEY = st.secrets["supabase"]["key"]
 except Exception:
+    SUPABASE_URL = None
+    SUPABASE_KEY = None
+
+if not SUPABASE_URL:
     SUPABASE_URL = "https://ivpqqxhacraagicjsytx.supabase.co"
+if not SUPABASE_KEY:
     SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml2cHFxeGhhY3JhYWdpY2pzeXR4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE1MTQ2MzUsImV4cCI6MjA4NzA5MDYzNX0.sBfLk05QMtFflQIRSFEVqYit_j9HOkoIWjpKXYrOWLo"
+
+# تنظيف البيانات من المسافات والأحرف غير الصالحة
+if SUPABASE_URL:
+    SUPABASE_URL = SUPABASE_URL.strip()
+if SUPABASE_KEY:
+    SUPABASE_KEY = SUPABASE_KEY.strip()
 
 @st.cache_resource
 def init_connection():
