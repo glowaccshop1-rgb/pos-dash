@@ -4,6 +4,7 @@ import pandas as pd
 from supabase import create_client, Client
 import datetime
 import plotly.express as px
+import re
 
 # --- إعداد الصفحة ---
 st.set_page_config(page_title="لوحة تحكم الإدارة", layout="wide", page_icon="📊")
@@ -63,7 +64,8 @@ if not SUPABASE_KEY:
 if SUPABASE_URL:
     SUPABASE_URL = SUPABASE_URL.strip()
 if SUPABASE_KEY:
-    SUPABASE_KEY = SUPABASE_KEY.strip()
+    # إزالة أي أحرف غير ASCII (مثل الأحرف العربية أو الرموز المخفية) التي قد تسبب UnicodeEncodeError
+    SUPABASE_KEY = re.sub(r'[^\x00-\x7F]+', '', str(SUPABASE_KEY)).strip()
 
 @st.cache_resource
 def init_connection():
