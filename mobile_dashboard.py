@@ -67,14 +67,14 @@ if SUPABASE_KEY:
     SUPABASE_KEY = str(SUPABASE_KEY).encode('ascii', 'ignore').decode('ascii').strip()
 
 @st.cache_resource
-def init_connection():
+def init_connection(url, key):
     try:
-        return create_client(SUPABASE_URL, SUPABASE_KEY)
+        return create_client(url, key)
     except Exception as e:
         st.error(f"فشل الاتصال بقاعدة البيانات: {e}")
         return None
 
-supabase = init_connection()
+supabase = init_connection(SUPABASE_URL, SUPABASE_KEY)
 
 # --- دوال جلب البيانات ---
 def get_sales_data():
