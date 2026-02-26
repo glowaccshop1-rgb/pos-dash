@@ -1,4 +1,4 @@
-
+# mobile_dashboard.py
 import streamlit as st
 import pandas as pd
 from supabase import create_client, Client
@@ -195,13 +195,59 @@ def get_cash_discrepancies():
     except Exception as e:
         return pd.DataFrame()
 
+@st.cache_data(ttl=300)
+def get_discounts_data():
+    """Fetches all discounts from the Supabase database."""
+    if not supabase: return pd.DataFrame()
+    try:
+        response = supabase.table('discounts').select("*").execute()
+        return pd.DataFrame(response.data)
+    except Exception as e:
+        st.error(f"خطأ في جلب بيانات الخصومات: {e}")
+        return pd.DataFrame()
+
+@st.cache_data(ttl=600)
+def get_branches_list():
+    """Fetches unique branch names from the branches table."""
+    if not supabase: return []
+    try:
+        response = supabase.table('branches').select("name").execute()
+        return [b['name'] for b in response.data]
+    except Exception:
+        return []
+
+def get_discount_branches(discount_name):
+    """Fetches branch names where a specific discount is applicable."""
+    if not supabase: return []
+    try:
+        response = supabase.table('discount_branch_applicability').select("branch_name").eq("discount_name", discount_name).execute()
+        return [b['branch_name'] for b in response.data]
+    except Exception:
+        return []
+
+def update_discount_branches(discount_name, branch_names):
+    """Updates the branch applicability for a specific discount."""
+    if not supabase: return False
+    try:
+        # Delete existing mappings
+        supabase.table('discount_branch_applicability').delete().eq("discount_name", discount_name).execute()
+        
+        # Insert new mappings
+        if branch_names:
+            data = [{"discount_name": discount_name, "branch_name": b} for b in branch_names]
+            supabase.table('discount_branch_applicability').insert(data).execute()
+        return True
+    except Exception as e:
+        st.error(f"خطأ في تحديث فروع الخصم: {e}")
+        return False
+
 # --- الواجهة الرئيسية ---
 st.title("📱 متابعة حركة الفروع والمخزون")
 st.markdown("---")
 
 # القائمة الجانبية
 st.sidebar.button("تسجيل الخروج", on_click=logout)
-sidebar_option = st.sidebar.radio("القائمة", ["ملخص المبيعات", "حالة المخزون", "المنتجات التي قاربت على الانتهاء", "طلبات الإجازات", "حركة الفروع", "نشاط المستخدمين", "تنبيهات الخزينة", "رسائل للمستخدمين"])
+sidebar_option = st.sidebar.radio("القائمة", ["ملخص المبيعات", "حالة المخزون", "المنتجات التي قاربت على الانتهاء", "طلبات الإجازات", "حركة الفروع", "نشاط المستخدمين", "تنبيهات الخزينة", "رسائل للمستخدمين", "الخصومات والعروض"])
 
 if sidebar_option == "ملخص المبيعات":
     st.header("💰 ملخص المبيعات")
@@ -480,3 +526,104 @@ elif sidebar_option == "رسائل للمستخدمين":
             st.dataframe(df_msgs[['username', 'message', 'is_read', 'created_at']], use_container_width=True)
     except Exception:
         st.info("لا توجد رسائل سابقة.")
+
+elif sidebar_option == "الخصومات والعروض":
+    st.header("🎟️ إدارة الخصومات والعروض")
+    
+    if st.button("تحديث البيانات 🔄"):
+        st.cache_data.clear()
+        
+    df_discounts = get_discounts_data()
+    branches = get_branches_list()
+    
+    if not df_discounts.empty:
+        st.subheader("قائمة الخصومات الحالية")
+        
+        # Display discounts table
+        display_df = df_discounts.copy()
+        # Rename columns for display
+        rename_map = {
+            'name': 'اسم الخصم',
+            'value': 'القيمة',
+            'value_type': 'نوع القيمة',
+            'discount_type': 'نوع الخصم',
+            'start_date': 'تاريخ البدء',
+            'end_date': 'تاريخ الانتهاء'
+        }
+        display_df = display_df.rename(columns=rename_map)
+        
+        cols_to_show = ['اسم الخصم', 'القيمة', 'نوع القيمة', 'نوع الخصم', 'تاريخ البدء', 'تاريخ الانتهاء']
+        cols_to_show = [c for c in cols_to_show if c in display_df.columns]
+        
+        st.dataframe(display_df[cols_to_show], use_container_width=True)
+        
+        st.divider()
+        st.subheader("⚙️ تخصيص الخصومات للفروع")
+        
+        selected_discount = st.selectbox("اختر الخصم لتعديل فروع تطبيقه:", df_discounts['name'].tolist())
+        
+        if selected_discount:
+            current_discount_branches = get_discount_branches(selected_discount)
+            
+            st.write(f"تحديد الفروع التي يطبق عليها خصم: **{selected_discount}**")
+            
+            # Multi-select for branches
+            selected_branches = st.multiselect(
+                "اختر الفروع:",
+                options=branches,
+                default=[b for b in current_discount_branches if b in branches]
+            )
+            
+            if st.button("حفظ إعدادات الفروع 💾"):
+                if update_discount_branches(selected_discount, selected_branches):
+                    st.success(f"تم تحديث فروع تطبيق الخصم '{selected_discount}' بنجاح!")
+                    st.cache_data.clear()
+                else:
+                    st.error("فشل في تحديث فروع تطبيق الخصم.")
+    else:
+        st.info("لا توجد خصومات مسجلة حالياً.")
+    
+    st.divider()
+    st.subheader("➕ إضافة خصم جديد (مبسط)")
+    
+    with st.form("add_discount_form"):
+        d_name = st.text_input("اسم الخصم:")
+        col1, col2 = st.columns(2)
+        d_value = col1.number_input("القيمة:", min_value=0.0, step=0.01)
+        d_value_type = col2.selectbox("نوع القيمة:", ["percentage", "amount"])
+        
+        d_type = st.selectbox("نوع الخصم:", ["lifetime", "temporary", "usage_limit", "invoice_threshold"])
+        
+        d_start = st.date_input("تاريخ البدء:", datetime.date.today())
+        d_end = st.date_input("تاريخ الانتهاء:", datetime.date.today() + datetime.timedelta(days=30))
+        
+        d_branches = st.multiselect("تطبيق على الفروع:", options=branches)
+        
+        submitted = st.form_submit_button("إضافة الخصم 🚀")
+        
+        if submitted:
+            if d_name:
+                try:
+                    discount_data = {
+                        "name": d_name,
+                        "value": d_value,
+                        "value_type": d_value_type,
+                        "discount_type": d_type,
+                        "start_date": d_start.isoformat() if d_type != "lifetime" else None,
+                        "end_date": d_end.isoformat() if d_type != "lifetime" else None,
+                        "created_at": datetime.datetime.now().isoformat()
+                    }
+                    # Insert discount
+                    supabase.table('discounts').insert(discount_data).execute()
+                    
+                    # Insert branch applicability
+                    if d_branches:
+                        update_discount_branches(d_name, d_branches)
+                        
+                    st.success(f"تم إضافة الخصم '{d_name}' بنجاح!")
+                    st.cache_data.clear()
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"حدث خطأ أثناء إضافة الخصم: {e}")
+            else:
+                st.warning("الرجاء إدخال اسم الخصم.")
