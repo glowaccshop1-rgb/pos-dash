@@ -312,7 +312,7 @@ if sidebar_option == "ملخص المبيعات":
     
     # Date filter
     col1, col2 = st.columns(2)
-    start_date = col1.date_input("من تاريخ", datetime.date.today() - datetime.timedelta(days=30))
+    start_date = col1.date_input("من تاريخ", datetime.date.today())
     end_date = col2.date_input("إلى تاريخ", datetime.date.today())
 
     if start_date > end_date:
