@@ -100,8 +100,7 @@ def get_sales_data(start_date, end_date, branch_name=None):
     try:
         query = supabase.table('invoices').select("*", count='exact') \
             .gte('invoice_date', start_str) \
-            .lt('invoice_date', end_str) \
-            .or_("transaction_type.is.null,transaction_type.neq.return")
+            .lt('invoice_date', end_str)
 
         if branch_name and branch_name != "الكل":
             query = query.eq('branch_name', branch_name)
@@ -109,6 +108,10 @@ def get_sales_data(start_date, end_date, branch_name=None):
         response = query.order('created_at', desc=True).execute()
         df = pd.DataFrame(response.data)
         if not df.empty:
+            # Filter out returns manually in Python to avoid API filter issues
+            if 'transaction_type' in df.columns:
+                df = df[df['transaction_type'] != 'return']
+            
             df['invoice_date'] = pd.to_datetime(df['invoice_date'])
             df['total_amount'] = pd.to_numeric(df['total_amount'])
         return df
@@ -126,17 +129,17 @@ def get_sold_products_data(start_date, end_date, branch_name=None):
 
     try:
         # Step 1: Get invoice IDs within the date range
-        query = supabase.table('invoices').select("id", count='exact') \
+        query = supabase.table('invoices').select("id, transaction_type", count='exact') \
             .gte('invoice_date', start_str) \
-            .lt('invoice_date', end_str) \
-            .or_("transaction_type.is.null,transaction_type.neq.return")
+            .lt('invoice_date', end_str)
 
         if branch_name and branch_name != "الكل":
             query = query.eq('branch_name', branch_name)
 
         invoices_response = query.execute()
 
-        invoice_ids = [inv['id'] for inv in invoices_response.data]
+        # Filter invoices manually
+        invoice_ids = [inv['id'] for inv in invoices_response.data if inv.get('transaction_type') != 'return']
 
         if not invoice_ids:
             return pd.DataFrame()
@@ -144,10 +147,14 @@ def get_sold_products_data(start_date, end_date, branch_name=None):
         # Step 2: Get transaction items for those invoices
         items_response = supabase.table('transaction_items').select("product_name, product_barcode, quantity, transaction_type") \
             .in_('invoice_id', invoice_ids) \
-            .or_("transaction_type.is.null,transaction_type.neq.return").execute()
+            .execute()
         
         df_items = pd.DataFrame(items_response.data)
         
+        # Filter items manually
+        if not df_items.empty and 'transaction_type' in df_items.columns:
+            df_items = df_items[df_items['transaction_type'] != 'return']
+            
         if df_items.empty:
             return pd.DataFrame()
 
