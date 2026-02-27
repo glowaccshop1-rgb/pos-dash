@@ -86,9 +86,10 @@ def get_sales_data(start_date, end_date):
     end_str = (end_date + datetime.timedelta(days=1)).strftime('%Y-%m-%d')
 
     try:
-        response = supabase.table('invoices').select("*") \
+        response = supabase.table('invoices').select("*", count='exact') \
             .gte('invoice_date', start_str) \
             .lt('invoice_date', end_str) \
+            .eq('transaction_type', 'sale') \
             .order('created_at', desc=True).execute()
         df = pd.DataFrame(response.data)
         if not df.empty:
@@ -109,17 +110,19 @@ def get_sold_products_data(start_date, end_date):
 
     try:
         # Step 1: Get invoice IDs within the date range
-        invoices_response = supabase.table('invoices').select("id") \
+        invoices_response = supabase.table('invoices').select("id", count='exact') \
+            .eq('transaction_type', 'sale') \
             .gte('invoice_date', start_str) \
             .lt('invoice_date', end_str).execute()
         invoice_ids = [inv['id'] for inv in invoices_response.data]
 
         if not invoice_ids:
             return pd.DataFrame()
-
+        
         # Step 2: Get transaction items for those invoices
-        items_response = supabase.table('transaction_items').select("product_name, product_barcode, quantity") \
-            .in_('invoice_id', invoice_ids).execute()
+        items_response = supabase.table('transaction_items').select("product_name, product_barcode, quantity, transaction_type") \
+            .in_('invoice_id', invoice_ids) \
+            .eq('transaction_type', 'sale').execute()
         
         df_items = pd.DataFrame(items_response.data)
         
@@ -203,6 +206,9 @@ def get_discounts_data():
         response = supabase.table('discounts').select("*").execute()
         return pd.DataFrame(response.data)
     except Exception as e:
+        if "PGRST205" in str(e):
+            st.warning("⚠️ جدول الخصومات (discounts) غير موجود في Supabase. يرجى تشغيل ملف SQL المرفق لإنشائه.")
+            return pd.DataFrame()
         st.error(f"خطأ في جلب بيانات الخصومات: {e}")
         return pd.DataFrame()
 
@@ -239,6 +245,10 @@ def update_discount_branches(discount_name, branch_names):
         return True
     except Exception as e:
         st.error(f"خطأ في تحديث فروع الخصم: {e}")
+        if "PGRST205" in str(e):
+            st.error("⚠️ جدول صلاحيات الفروع (discount_branch_applicability) غير موجود في Supabase.")
+        else:
+            st.error(f"خطأ في تحديث فروع الخصم: {e}")
         return False
 
 # --- الواجهة الرئيسية ---
