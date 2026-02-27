@@ -76,6 +76,10 @@ def init_connection(url, key):
 
 supabase = init_connection(SUPABASE_URL, SUPABASE_KEY)
 
+if not supabase:
+    st.error("❌ فشل الاتصال بقاعدة البيانات. يرجى التحقق من بيانات الاتصال.")
+    st.stop()
+
 @st.cache_data(ttl=600)
 def get_branches_list():
     """Fetches unique branch names from the branches table."""
@@ -256,16 +260,6 @@ def get_discounts_data():
         st.error(f"خطأ في جلب بيانات الخصومات: {e}")
         return pd.DataFrame()
 
-@st.cache_data(ttl=600)
-def get_branches_list():
-    """Fetches unique branch names from the branches table."""
-    if not supabase: return []
-    try:
-        response = supabase.table('branches').select("name").execute()
-        return [b['name'] for b in response.data]
-    except Exception:
-        return []
-
 def get_discount_branches(discount_name):
     """Fetches branch names where a specific discount is applicable."""
     if not supabase: return []
@@ -303,7 +297,13 @@ st.markdown("---")
 st.sidebar.button("تسجيل الخروج", on_click=logout)
 
 branches = get_branches_list()
+if not branches or branches == ["الكل"]:
+    branches = ["الكل"]
 selected_branch = st.sidebar.selectbox("اختر الفرع:", branches)
+
+if st.sidebar.button("🔄 تحديث جميع البيانات"):
+    st.cache_data.clear()
+    st.rerun()
 
 sidebar_option = st.sidebar.radio("القائمة", ["ملخص المبيعات", "حالة المخزون", "المنتجات التي قاربت على الانتهاء", "طلبات الإجازات", "حركة الفروع", "نشاط المستخدمين", "تنبيهات الخزينة", "رسائل للمستخدمين", "الخصومات والعروض"])
 
@@ -312,7 +312,7 @@ if sidebar_option == "ملخص المبيعات":
     
     # Date filter
     col1, col2 = st.columns(2)
-    start_date = col1.date_input("من تاريخ", datetime.date.today())
+    start_date = col1.date_input("من تاريخ", datetime.date.today() - datetime.timedelta(days=30))
     end_date = col2.date_input("إلى تاريخ", datetime.date.today())
 
     if start_date > end_date:
