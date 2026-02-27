@@ -145,11 +145,17 @@ def get_sold_products_data(start_date, end_date, branch_name=None):
             return pd.DataFrame()
         
         # Step 2: Get transaction items for those invoices
-        items_response = supabase.table('transaction_items').select("product_name, product_barcode, quantity, transaction_type") \
-            .in_('invoice_id', invoice_ids) \
-            .execute()
+        # Chunking invoice_ids to avoid URL length limit errors
+        chunk_size = 50
+        all_items = []
+        for i in range(0, len(invoice_ids), chunk_size):
+            chunk = invoice_ids[i:i + chunk_size]
+            items_response = supabase.table('transaction_items').select("product_name, product_barcode, quantity, transaction_type") \
+                .in_('invoice_id', chunk) \
+                .execute()
+            all_items.extend(items_response.data)
         
-        df_items = pd.DataFrame(items_response.data)
+        df_items = pd.DataFrame(all_items)
         
         # Filter items manually
         if not df_items.empty and 'transaction_type' in df_items.columns:
@@ -197,7 +203,7 @@ def get_users_list():
 def get_inventory_data(branch_name=None):
     if not supabase: return pd.DataFrame()
     try:
-        query = supabase.table('products').select("*")
+        query = supabase.table('products').select("name, quantity, selling_price, branch_name, barcode")
 
         if branch_name and branch_name != "الكل":
             query = query.eq('branch_name', branch_name)
@@ -205,8 +211,8 @@ def get_inventory_data(branch_name=None):
         response = query.execute()
         df = pd.DataFrame(response.data)
         if not df.empty:
-            df['quantity'] = pd.to_numeric(df['quantity'])
-            df['selling_price'] = pd.to_numeric(df['selling_price'])
+            df['quantity'] = pd.to_numeric(df['quantity'], errors='coerce').fillna(0)
+            df['selling_price'] = pd.to_numeric(df['selling_price'], errors='coerce').fillna(0.0)
         return df
     except Exception as e:
         st.error(f"خطأ في جلب بيانات المخزون: {e}")
