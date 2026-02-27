@@ -101,7 +101,7 @@ def get_sales_data(start_date, end_date, branch_name=None):
         query = supabase.table('invoices').select("*", count='exact') \
             .gte('invoice_date', start_str) \
             .lt('invoice_date', end_str) \
-            .or_("transaction_type.eq.sale,transaction_type.is.null")
+            .neq('transaction_type', 'return')
 
         if branch_name and branch_name != "الكل":
             query = query.eq('branch_name', branch_name)
@@ -129,7 +129,7 @@ def get_sold_products_data(start_date, end_date, branch_name=None):
         query = supabase.table('invoices').select("id", count='exact') \
             .gte('invoice_date', start_str) \
             .lt('invoice_date', end_str) \
-            .or_("transaction_type.eq.sale,transaction_type.is.null")
+            .neq('transaction_type', 'return')
 
         if branch_name and branch_name != "الكل":
             query = query.eq('branch_name', branch_name)
@@ -144,7 +144,7 @@ def get_sold_products_data(start_date, end_date, branch_name=None):
         # Step 2: Get transaction items for those invoices
         items_response = supabase.table('transaction_items').select("product_name, product_barcode, quantity, transaction_type") \
             .in_('invoice_id', invoice_ids) \
-            .or_("transaction_type.eq.sale,transaction_type.is.null").execute()
+            .neq('transaction_type', 'return').execute()
         
         df_items = pd.DataFrame(items_response.data)
         
