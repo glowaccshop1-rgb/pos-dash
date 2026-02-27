@@ -289,6 +289,42 @@ def update_discount_branches(discount_name, branch_names):
             st.error(f"خطأ في تحديث فروع الخصم: {e}")
         return False
 
+def get_discount_products(discount_name):
+    """Fetches product barcodes where a specific discount is applicable."""
+    if not supabase: return []
+    try:
+        response = supabase.table('discount_product_applicability').select("product_barcode, product_name").eq("discount_name", discount_name).execute()
+        return [(p['product_barcode'], p['product_name']) for p in response.data]
+    except Exception:
+        return []
+
+def get_all_products():
+    """Fetches all products from the products table."""
+    if not supabase: return []
+    try:
+        response = supabase.table('products').select("barcode, name").execute()
+        return [(p['barcode'], p['name']) for p in response.data]
+    except Exception:
+        return []
+
+def update_discount_products(discount_name, products_list):
+    """Updates the product applicability for a specific discount."""
+    if not supabase: return False
+    try:
+        # Delete existing mappings
+        supabase.table('discount_product_applicability').delete().eq("discount_name", discount_name).execute()
+        
+        # Insert new mappings
+        if products_list:
+            data = [{"discount_name": discount_name, "product_barcode": barcode, "product_name": name} for barcode, name in products_list]
+            supabase.table('discount_product_applicability').insert(data).execute()
+        return True
+    except Exception as e:
+        st.error(f"خطأ في تحديث منتجات الخصم: {e}")
+        if "PGRST205" in str(e):
+            st.error("⚠️ جدول صلاحيات المنتجات (discount_product_applicability) غير موجود في Supabase. يرجى تشغيل ملف SQL جديد.")
+        return False
+
 # --- الواجهة الرئيسية ---
 st.title("📱 متابعة حركة الفروع والمخزون")
 st.markdown("---")
@@ -616,28 +652,56 @@ elif sidebar_option == "الخصومات والعروض":
         st.dataframe(display_df[cols_to_show], use_container_width=True)
         
         st.divider()
-        st.subheader("⚙️ تخصيص الخصومات للفروع")
+        st.subheader("⚙️ تخصيص الخصومات للفروع والمنتجات")
         
-        selected_discount = st.selectbox("اختر الخصم لتعديل فروع تطبيقه:", df_discounts['name'].tolist())
+        selected_discount = st.selectbox("اختر الخصم لتعديل تطبيقه:", df_discounts['name'].tolist())
         
         if selected_discount:
             current_discount_branches = get_discount_branches(selected_discount)
+            current_discount_products = get_discount_products(selected_discount)
+            all_products = get_all_products()
             
-            st.write(f"تحديد الفروع التي يطبق عليها خصم: **{selected_discount}**")
+            col1, col2 = st.columns(2)
             
-            # Multi-select for branches
-            selected_branches = st.multiselect(
-                "اختر الفروع:",
-                options=branches,
-                default=[b for b in current_discount_branches if b in branches]
-            )
+            with col1:
+                st.write(f"**تحديد الفروع** - {selected_discount}")
+                selected_branches = st.multiselect(
+                    "اختر الفروع:",
+                    options=branches,
+                    default=[b for b in current_discount_branches if b in branches],
+                    key="discount_branches"
+                )
             
-            if st.button("حفظ إعدادات الفروع 💾"):
-                if update_discount_branches(selected_discount, selected_branches):
-                    st.success(f"تم تحديث فروع تطبيق الخصم '{selected_discount}' بنجاح!")
-                    st.cache_data.clear()
-                else:
-                    st.error("فشل في تحديث فروع تطبيق الخصم.")
+            with col2:
+                st.write(f"**تحديد المنتجات** - {selected_discount}")
+                product_options = {f"{name} ({barcode})": (barcode, name) for barcode, name in all_products}
+                default_products = [f"{name} ({barcode})" for barcode, name in current_discount_products if any(p[0] == barcode for p in all_products)]
+                
+                selected_product_keys = st.multiselect(
+                    "اختر المنتجات (اتركها فارغة لتطبيق على جميع المنتجات):",
+                    options=list(product_options.keys()),
+                    default=default_products,
+                    key="discount_products"
+                )
+                selected_products = [product_options[key] for key in selected_product_keys]
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if st.button("حفظ إعدادات الفروع 💾", key="save_branches"):
+                    if update_discount_branches(selected_discount, selected_branches):
+                        st.success(f"تم تحديث فروع تطبيق الخصم '{selected_discount}' بنجاح!")
+                        st.cache_data.clear()
+                    else:
+                        st.error("فشل في تحديث فروع تطبيق الخصم.")
+            
+            with col2:
+                if st.button("حفظ إعدادات المنتجات 💾", key="save_products"):
+                    if update_discount_products(selected_discount, selected_products):
+                        st.success(f"تم تحديث المنتجات لخصم '{selected_discount}' بنجاح!")
+                        st.cache_data.clear()
+                    else:
+                        st.error("فشل في تحديث المنتجات.")
     else:
         st.info("لا توجد خصومات مسجلة حالياً.")
     
@@ -655,7 +719,19 @@ elif sidebar_option == "الخصومات والعروض":
         d_start = st.date_input("تاريخ البدء:", datetime.date.today())
         d_end = st.date_input("تاريخ الانتهاء:", datetime.date.today() + datetime.timedelta(days=30))
         
-        d_branches = st.multiselect("تطبيق على الفروع:", options=branches)
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            d_branches = st.multiselect("تطبيق على الفروع:", options=branches)
+        
+        with col2:
+            all_products_form = get_all_products()
+            product_options_form = {f"{name} ({barcode})": (barcode, name) for barcode, name in all_products_form}
+            selected_product_keys_form = st.multiselect(
+                "اختر المنتجات (اتركها فارغة لجميع المنتجات):",
+                options=list(product_options_form.keys())
+            )
+            d_products = [product_options_form[key] for key in selected_product_keys_form]
         
         submitted = st.form_submit_button("إضافة الخصم 🚀")
         
@@ -677,6 +753,10 @@ elif sidebar_option == "الخصومات والعروض":
                     # Insert branch applicability
                     if d_branches:
                         update_discount_branches(d_name, d_branches)
+                    
+                    # Insert product applicability
+                    if d_products:
+                        update_discount_products(d_name, d_products)
                         
                     st.success(f"تم إضافة الخصم '{d_name}' بنجاح!")
                     st.cache_data.clear()
