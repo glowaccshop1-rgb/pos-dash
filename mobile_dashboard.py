@@ -76,9 +76,21 @@ def init_connection(url, key):
 
 supabase = init_connection(SUPABASE_URL, SUPABASE_KEY)
 
+@st.cache_data(ttl=600)
+def get_branches_list():
+    """Fetches unique branch names from the branches table."""
+    if not supabase: return ["الكل"]
+    try:
+        response = supabase.table('branches').select("name").execute()
+        # Add "All" option and ensure uniqueness
+        branches = ["الكل"] + sorted(list(set([b['name'] for b in response.data])))
+        return branches
+    except Exception:
+        return ["الكل"]
+
 # --- دوال جلب البيانات ---
 @st.cache_data(ttl=600) # Cache for 10 minutes
-def get_sales_data(start_date, end_date):
+def get_sales_data(start_date, end_date, branch_name=None):
     if not supabase: return pd.DataFrame()
     
     start_str = start_date.strftime('%Y-%m-%d')
@@ -86,11 +98,15 @@ def get_sales_data(start_date, end_date):
     end_str = (end_date + datetime.timedelta(days=1)).strftime('%Y-%m-%d')
 
     try:
-        response = supabase.table('invoices').select("*", count='exact') \
+        query = supabase.table('invoices').select("*", count='exact') \
             .gte('invoice_date', start_str) \
             .lt('invoice_date', end_str) \
-            .eq('transaction_type', 'sale') \
-            .order('created_at', desc=True).execute()
+            .eq('transaction_type', 'sale')
+
+        if branch_name and branch_name != "الكل":
+            query = query.eq('branch_name', branch_name)
+
+        response = query.order('created_at', desc=True).execute()
         df = pd.DataFrame(response.data)
         if not df.empty:
             df['invoice_date'] = pd.to_datetime(df['invoice_date'])
@@ -101,7 +117,7 @@ def get_sales_data(start_date, end_date):
         return pd.DataFrame()
 
 @st.cache_data(ttl=600)
-def get_sold_products_data(start_date, end_date):
+def get_sold_products_data(start_date, end_date, branch_name=None):
     """Fetches and aggregates sold products data within a date range."""
     if not supabase: return pd.DataFrame()
 
@@ -110,10 +126,16 @@ def get_sold_products_data(start_date, end_date):
 
     try:
         # Step 1: Get invoice IDs within the date range
-        invoices_response = supabase.table('invoices').select("id", count='exact') \
+        query = supabase.table('invoices').select("id", count='exact') \
             .eq('transaction_type', 'sale') \
             .gte('invoice_date', start_str) \
-            .lt('invoice_date', end_str).execute()
+            .lt('invoice_date', end_str)
+
+        if branch_name and branch_name != "الكل":
+            query = query.eq('branch_name', branch_name)
+
+        invoices_response = query.execute()
+
         invoice_ids = [inv['id'] for inv in invoices_response.data]
 
         if not invoice_ids:
@@ -139,7 +161,7 @@ def get_sold_products_data(start_date, end_date):
         st.error(f"خطأ في جلب بيانات المنتجات المباعة: {e}")
         return pd.DataFrame()
 
-@st.cache_data(ttl=300) # Cache for 5 minutes
+@st.cache_data(ttl=300)
 def get_leave_requests():
     """Fetches leave requests from the Supabase database."""
     if not supabase: return pd.DataFrame()
@@ -165,9 +187,15 @@ def get_users_list():
     except Exception:
         return []
 
-def get_inventory_data():
+def get_inventory_data(branch_name=None):
     if not supabase: return pd.DataFrame()
-    response = supabase.table('products').select("*").execute()
+
+    query = supabase.table('products').select("*")
+
+    if branch_name and branch_name != "الكل":
+        query = query.eq('branch_name', branch_name)
+
+    response = query.execute()
     df = pd.DataFrame(response.data)
     if not df.empty:
         df['quantity'] = pd.to_numeric(df['quantity'])
@@ -257,6 +285,10 @@ st.markdown("---")
 
 # القائمة الجانبية
 st.sidebar.button("تسجيل الخروج", on_click=logout)
+
+branches = get_branches_list()
+selected_branch = st.sidebar.selectbox("اختر الفرع:", branches)
+
 sidebar_option = st.sidebar.radio("القائمة", ["ملخص المبيعات", "حالة المخزون", "المنتجات التي قاربت على الانتهاء", "طلبات الإجازات", "حركة الفروع", "نشاط المستخدمين", "تنبيهات الخزينة", "رسائل للمستخدمين", "الخصومات والعروض"])
 
 if sidebar_option == "ملخص المبيعات":
@@ -271,7 +303,7 @@ if sidebar_option == "ملخص المبيعات":
         st.error("تاريخ البداية لا يمكن أن يكون بعد تاريخ النهاية.")
         st.stop()
 
-    df_sales = get_sales_data(start_date, end_date)
+    df_sales = get_sales_data(start_date, end_date, selected_branch)
     
     if not df_sales.empty:
         # مؤشرات سريعة
@@ -290,7 +322,7 @@ if sidebar_option == "ملخص المبيعات":
         
         # عرض المنتجات المباعة
         with st.expander("📦 عرض المنتجات المباعة في الفترة المحددة"):
-            df_sold_products = get_sold_products_data(start_date, end_date)
+            df_sold_products = get_sold_products_data(start_date, end_date, selected_branch)
             if not df_sold_products.empty:
                 st.dataframe(df_sold_products, use_container_width=True)
             else:
@@ -307,7 +339,7 @@ elif sidebar_option == "حالة المخزون":
     if st.button("تحديث المخزون 🔄"):
         st.cache_data.clear()
         
-    df_products = get_inventory_data()
+    df_products = get_inventory_data(selected_branch)
     
     if not df_products.empty:
         # تنبيهات النواقص
@@ -334,7 +366,7 @@ elif sidebar_option == "المنتجات التي قاربت على الانته
     if st.button("تحديث البيانات 🔄"):
         st.cache_data.clear()
         
-    df_products = get_inventory_data()
+    df_products = get_inventory_data(selected_branch)
     
     if not df_products.empty:
         # فلترة المنتجات التي قاربت على النفاذ بناءً على الحد الذي أدخله المستخدم
