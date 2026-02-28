@@ -82,15 +82,32 @@ if not supabase:
 
 @st.cache_data(ttl=600)
 def get_branches_list():
-    """Fetches unique branch names from the branches table."""
+    """Fetches unique branch names from branches table and active history."""
     if not supabase: return ["الكل"]
+    
+    found_branches = set()
+    
+    # 1. المحاولة الأولى: جلب الفروع من جدول الفروع المخصص
     try:
         response = supabase.table('branches').select("name").execute()
-        # Add "All" option and ensure uniqueness
-        branches = ["الكل"] + sorted(list(set([b['name'] for b in response.data])))
-        return branches
+        for item in response.data:
+            if item.get('name'):
+                found_branches.add(item['name'])
     except Exception:
-        return ["الكل"]
+        pass
+
+    # 2. المحاولة الثانية: استكشاف الفروع من سجل دخول المستخدمين (لضمان ظهور الفروع النشطة)
+    try:
+        response = supabase.table('user_sessions').select("branch_name").order('login_time', desc=True).limit(100).execute()
+        for item in response.data:
+            if item.get('branch_name'):
+                found_branches.add(item['branch_name'])
+    except Exception:
+        pass
+
+    # ترتيب القائمة وإضافة خيار الكل
+    branches = ["الكل"] + sorted(list(found_branches))
+    return branches
 
 # --- دوال جلب البيانات ---
 @st.cache_data(ttl=600) # Cache for 10 minutes
