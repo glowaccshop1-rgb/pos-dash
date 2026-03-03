@@ -133,6 +133,10 @@ def get_sales_data(start_date, end_date, branch_name=None):
             if 'transaction_type' in df.columns:
                 df = df[df['transaction_type'] != 'return']
             
+            # منع تكرار الفواتير في العرض لضمان صحة الإجماليات
+            if 'reference_number' in df.columns and 'branch_name' in df.columns:
+                df = df.drop_duplicates(subset=['reference_number', 'branch_name'])
+            
             df['invoice_date'] = pd.to_datetime(df['invoice_date'])
             df['total_amount'] = pd.to_numeric(df['total_amount'])
         return df
@@ -150,7 +154,7 @@ def get_sold_products_data(start_date, end_date, branch_name=None):
 
     try:
         # Step 1: Get invoice IDs within the date range
-        query = supabase.table('invoices').select("id, transaction_type", count='exact') \
+        query = supabase.table('invoices').select("id, reference_number, branch_name, transaction_type", count='exact') \
             .gte('invoice_date', start_str) \
             .lt('invoice_date', end_str)
 
@@ -159,8 +163,17 @@ def get_sold_products_data(start_date, end_date, branch_name=None):
 
         invoices_response = query.execute()
 
-        # Filter invoices manually
-        invoice_ids = [inv['id'] for inv in invoices_response.data if inv.get('transaction_type') != 'return']
+        # Filter invoices manually and handle potential duplicates in the database
+        df_inv = pd.DataFrame(invoices_response.data)
+        if df_inv.empty:
+            return pd.DataFrame()
+        
+        # استبعاد المرتجعات ومنع تكرار الفواتير
+        df_inv = df_inv[df_inv['transaction_type'] != 'return']
+        if 'reference_number' in df_inv.columns and 'branch_name' in df_inv.columns:
+            df_inv = df_inv.drop_duplicates(subset=['reference_number', 'branch_name'])
+            
+        invoice_ids = df_inv['id'].tolist()
 
         if not invoice_ids:
             return pd.DataFrame()
