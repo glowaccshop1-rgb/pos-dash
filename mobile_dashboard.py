@@ -5,6 +5,7 @@ from supabase import create_client, Client
 import datetime
 import plotly.express as px
 import re
+import time
 
 # --- إعداد الصفحة ---
 st.set_page_config(page_title="لوحة تحكم الإدارة", layout="wide", page_icon="📊")
@@ -209,11 +210,16 @@ def get_sold_products_data(start_date, end_date, branch_name=None):
         return pd.DataFrame()
 
 @st.cache_data(ttl=300)
-def get_leave_requests():
+def get_leave_requests(branch_name=None):
     """Fetches leave requests from the Supabase database."""
     if not supabase: return pd.DataFrame()
     try:
-        response = supabase.table('employee_leaves').select("*").order('requested_at', desc=True).limit(200).execute()
+        query = supabase.table('employee_leaves').select("*").order('requested_at', desc=True).limit(200)
+        
+        if branch_name and branch_name != "الكل":
+            query = query.eq('branch_name', branch_name)
+            
+        response = query.execute()
         df = pd.DataFrame(response.data)
         if not df.empty and 'requested_at' in df.columns:
             df['requested_at'] = pd.to_datetime(df['requested_at']).dt.strftime('%Y-%m-%d %H:%M')
@@ -247,15 +253,28 @@ def get_inventory_data(branch_name=None):
         if not df.empty:
             df['quantity'] = pd.to_numeric(df['quantity'], errors='coerce').fillna(0)
             df['selling_price'] = pd.to_numeric(df['selling_price'], errors='coerce').fillna(0.0)
+            
+            # تجميع الكميات للمنتجات المكررة في نفس الفرع لضمان دقة الأعداد
+            if 'barcode' in df.columns and 'branch_name' in df.columns:
+                df = df.groupby(['barcode', 'branch_name'], as_index=False).agg({
+                    'name': 'first',
+                    'quantity': 'sum',
+                    'selling_price': 'first'
+                })
         return df
     except Exception as e:
         st.error(f"خطأ في جلب بيانات المخزون: {e}")
         return pd.DataFrame()
 
-def get_user_sessions():
+def get_user_sessions(branch_name=None):
     if not supabase: return pd.DataFrame()
     try:
-        response = supabase.table('user_sessions').select("*").order('login_time', desc=True).limit(100).execute()
+        query = supabase.table('user_sessions').select("*").order('login_time', desc=True).limit(100)
+        
+        if branch_name and branch_name != "الكل":
+            query = query.eq('branch_name', branch_name)
+            
+        response = query.execute()
         df = pd.DataFrame(response.data)
         if not df.empty:
             df['login_time'] = pd.to_datetime(df['login_time'])
@@ -265,10 +284,15 @@ def get_user_sessions():
     except Exception as e:
         return pd.DataFrame()
 
-def get_cash_discrepancies():
+def get_cash_discrepancies(branch_name=None):
     if not supabase: return pd.DataFrame()
     try:
-        response = supabase.table('cash_discrepancies').select("*").order('timestamp', desc=True).limit(50).execute()
+        query = supabase.table('cash_discrepancies').select("*").order('timestamp', desc=True).limit(50)
+        
+        if branch_name and branch_name != "الكل":
+            query = query.eq('branch_name', branch_name)
+            
+        response = query.execute()
         df = pd.DataFrame(response.data)
         if not df.empty:
             df['timestamp'] = pd.to_datetime(df['timestamp'])
@@ -355,6 +379,31 @@ def update_discount_products(discount_name, products_list):
             st.error("⚠️ جدول صلاحيات المنتجات (discount_product_applicability) غير موجود في Supabase. يرجى تشغيل ملف SQL جديد.")
         return False
 
+def update_product_quantity(barcode, branch_name, new_quantity):
+    """Updates product quantity in Supabase, handling duplicates."""
+    if not supabase: return False
+    try:
+        # Fetch rows to handle duplicates
+        response = supabase.table('products').select("id").eq('barcode', barcode).eq('branch_name', branch_name).execute()
+        rows = response.data
+        
+        if not rows:
+            return False
+            
+        # Update the first row
+        first_id = rows[0]['id']
+        supabase.table('products').update({'quantity': new_quantity}).eq('id', first_id).execute()
+        
+        # Delete duplicates if any (cleaning up data)
+        if len(rows) > 1:
+            for row in rows[1:]:
+                supabase.table('products').delete().eq('id', row['id']).execute()
+                
+        return True
+    except Exception as e:
+        st.error(f"خطأ في تحديث المنتج {barcode}: {e}")
+        return False
+
 # --- الواجهة الرئيسية ---
 st.title("📱 متابعة حركة الفروع والمخزون")
 st.markdown("---")
@@ -420,6 +469,7 @@ elif sidebar_option == "حالة المخزون":
     st.header("📦 حالة المخزون")
     if st.button("تحديث المخزون 🔄"):
         st.cache_data.clear()
+        st.rerun()
         
     df_products = get_inventory_data(selected_branch)
     
@@ -432,10 +482,60 @@ elif sidebar_option == "حالة المخزون":
         
         # البحث
         search_term = st.text_input("بحث عن منتج:")
+        df_display = df_products.copy()
         if search_term:
-            df_products = df_products[df_products['name'].str.contains(search_term, case=False)]
+            df_display = df_display[df_display['name'].str.contains(search_term, case=False)]
             
-        st.dataframe(df_products[['name', 'quantity', 'selling_price', 'branch_name']], use_container_width=True)
+        # Reorder columns for editor
+        cols = ['name', 'quantity', 'selling_price', 'branch_name', 'barcode']
+        # Ensure columns exist
+        cols = [c for c in cols if c in df_display.columns]
+        df_display = df_display[cols]
+
+        st.caption("يمكنك تعديل الكميات في الجدول أدناه ثم الضغط على 'حفظ التعديلات'.")
+        
+        edited_df = st.data_editor(
+            df_display,
+            use_container_width=True,
+            column_config={
+                "name": st.column_config.TextColumn("اسم المنتج", disabled=True),
+                "quantity": st.column_config.NumberColumn("الكمية", min_value=0, step=1, required=True),
+                "selling_price": st.column_config.NumberColumn("سعر البيع", disabled=True),
+                "branch_name": st.column_config.TextColumn("الفرع", disabled=True),
+                "barcode": st.column_config.TextColumn("الباركود", disabled=True),
+            },
+            disabled=["name", "selling_price", "branch_name", "barcode"],
+            hide_index=True,
+            key="inventory_editor"
+        )
+
+        if st.button("حفظ التعديلات 💾", type="primary"):
+            updated_count = 0
+            with st.spinner("جاري حفظ التعديلات..."):
+                for index, row in edited_df.iterrows():
+                    barcode = row['barcode']
+                    branch = row['branch_name']
+                    new_qty = row['quantity']
+                    
+                    # Find original quantity to compare
+                    original_rows = df_products[
+                        (df_products['barcode'] == barcode) & 
+                        (df_products['branch_name'] == branch)
+                    ]
+                    
+                    if not original_rows.empty:
+                        old_qty = original_rows.iloc[0]['quantity']
+                        if new_qty != old_qty:
+                            if update_product_quantity(barcode, branch, new_qty):
+                                updated_count += 1
+            
+            if updated_count > 0:
+                st.success(f"تم تحديث {updated_count} منتجات بنجاح!")
+                time.sleep(1)
+                st.cache_data.clear()
+                st.rerun()
+            else:
+                st.info("لم يتم إجراء أي تغييرات.")
     else:
         st.info("لا توجد منتجات مسجلة.")
 
@@ -468,7 +568,7 @@ elif sidebar_option == "طلبات الإجازات":
     if st.button("تحديث الطلبات 🔄"):
         st.cache_data.clear()
 
-    df_leaves = get_leave_requests()
+    df_leaves = get_leave_requests(selected_branch)
 
     if not df_leaves.empty:
         # Metrics
@@ -536,7 +636,7 @@ elif sidebar_option == "نشاط المستخدمين":
     if st.button("تحديث النشاط 🔄"):
         st.cache_data.clear()
     
-    df_sessions = get_user_sessions()
+    df_sessions = get_user_sessions(selected_branch)
     
     if not df_sessions.empty:
         # تنسيق العرض
@@ -579,7 +679,7 @@ elif sidebar_option == "تنبيهات الخزينة":
     if st.button("تحديث التنبيهات 🔄"):
         st.cache_data.clear()
     
-    df_alerts = get_cash_discrepancies()
+    df_alerts = get_cash_discrepancies(selected_branch)
     
     if not df_alerts.empty:
         # تنسيق العرض
