@@ -10,6 +10,30 @@ import time
 # --- إعداد الصفحة ---
 st.set_page_config(page_title="لوحة تحكم الإدارة", layout="wide", page_icon="📊")
 
+# --- CSS for RTL support ---
+st.markdown("""
+    <style>
+    /* General RTL settings */
+    .main, .stSidebar {
+        direction: rtl;
+        text-align: right;
+    }
+    /* Ensure all inputs and selects are RTL */
+    .stTextInput, .stNumberInput, .stSelectbox, .stDateInput, .stTextArea, .stMultiSelect {
+        direction: rtl;
+    }
+    /* Align labels to the right */
+    div[data-testid="stMarkdownContainer"] p, div[data-testid="stMetric"], div[data-testid="stText"] {
+        text-align: right;
+    }
+    label {
+        text-align: right !important;
+        display: block;
+        width: 100%;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 # --- دوال التحقق من الدخول والخروج ---
 def check_login(username, password):
     """
@@ -361,6 +385,32 @@ def get_all_products():
     except Exception:
         return []
 
+def add_product_to_db(data):
+    """إضافة المنتج لقاعدة البيانات مع دعم upsert"""
+    if not supabase: return False, "No Supabase connection"
+    try:
+        # Use upsert to update if exists, or insert if new
+        # The composite primary key is usually (barcode, branch_name)
+        response = supabase.table('products').upsert(data, on_conflict='barcode, branch_name').execute()
+        
+        # Check for errors in response (works for supabase-py v1 and v2)
+        if hasattr(response, 'error') and response.error:
+            return False, str(response.error)
+        
+        # For some errors, the data might be empty and an error is in the response object itself
+        if not response.data and (hasattr(response, 'status_code') and response.status_code >= 400):
+             # Try to parse a more specific message if available
+             try:
+                 error_details = response.json()
+                 message = error_details.get('message', 'Unknown error')
+                 return False, f"Error: {message}"
+             except:
+                 return False, f"Error {response.status_code}: Unknown error from server."
+
+        return True, response.data
+    except Exception as e:
+        return False, str(e)
+
 def update_discount_products(discount_name, products_list):
     """Updates the product applicability for a specific discount."""
     if not supabase: return False
@@ -420,7 +470,7 @@ if st.sidebar.button("🔄 تحديث جميع البيانات"):
     st.cache_data.clear()
     st.rerun()
 
-sidebar_option = st.sidebar.radio("القائمة", ["ملخص المبيعات", "حالة المخزون", "المنتجات التي قاربت على الانتهاء", "طلبات الإجازات", "حركة الفروع", "نشاط المستخدمين", "تنبيهات الخزينة", "رسائل للمستخدمين", "الخصومات والعروض"])
+sidebar_option = st.sidebar.radio("القائمة", ["ملخص المبيعات", "حالة المخزون", "إضافة منتج جديد", "المنتجات التي قاربت على الانتهاء", "طلبات الإجازات", "حركة الفروع", "نشاط المستخدمين", "تنبيهات الخزينة", "رسائل للمستخدمين", "الخصومات والعروض"])
 
 if sidebar_option == "ملخص المبيعات":
     st.header("💰 ملخص المبيعات")
@@ -538,6 +588,82 @@ elif sidebar_option == "حالة المخزون":
                 st.info("لم يتم إجراء أي تغييرات.")
     else:
         st.info("لا توجد منتجات مسجلة.")
+
+elif sidebar_option == "إضافة منتج جديد":
+    st.header("📦 إضافة منتج جديد")
+    st.markdown("---")
+
+    # Use the existing get_branches_list function
+    all_branches = get_branches_list()
+    # Remove "الكل" option as it's not a valid branch to add to
+    if "الكل" in all_branches:
+        all_branches.remove("الكل")
+
+    # If a specific branch is selected in the sidebar, default to it
+    default_branch_index = 0
+    if selected_branch != "الكل" and selected_branch in all_branches:
+        try:
+            default_branch_index = all_branches.index(selected_branch)
+        except ValueError:
+            default_branch_index = 0 # Fallback
+
+    with st.form("product_form", clear_on_submit=True):
+        st.subheader("📍 بيانات الفرع والمنتج الأساسية")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            branch_to_add = st.selectbox("اختر الفرع لإضافة المنتج إليه:", all_branches, index=default_branch_index)
+        with col2:
+            barcode = st.text_input("الباركود *")
+
+        name = st.text_input("اسم المنتج *")
+        category = st.text_input("القسم / التصنيف")
+        
+        st.markdown("---")
+        st.subheader("💰 الأسعار والتكلفة")
+        
+        c1, c2 = st.columns(2)
+        with c1:
+            cost_price = st.number_input("سعر التكلفة", min_value=0.0, step=0.5, format="%.2f")
+        with c2:
+            selling_price = st.number_input("سعر البيع", min_value=0.0, step=0.5, format="%.2f")
+            
+        st.markdown("---")
+        st.subheader("🔢 المخزون")
+        
+        q1, q2 = st.columns(2)
+        with q1:
+            quantity = st.number_input("الكمية الحالية", min_value=0, step=1)
+        with q2:
+            min_quantity = st.number_input("حد الطلب (أدنى كمية)", min_value=0, step=1, value=5)
+            
+        st.markdown("---")
+        st.subheader("🗓️ تاريخ الصلاحية (اختياري)")
+        
+        has_expiry = st.checkbox("المنتج له تاريخ صلاحية؟")
+        expiry_date = None
+        if has_expiry:
+            expiry_date = st.date_input("تاريخ الانتهاء", min_value=datetime.date.today())
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        submitted = st.form_submit_button("➕ حفظ المنتج في المخزون")
+        
+        if submitted:
+            if not barcode or not name:
+                st.error("⚠️ يجب إدخال الباركود واسم المنتج.")
+            else:
+                product_data = { "barcode": barcode, "name": name, "branch_name": branch_to_add, "cost_price": cost_price, "selling_price": selling_price, "quantity": quantity, "min_quantity": min_quantity, "category": category, "expiry_date": str(expiry_date) if expiry_date else None, "created_at": datetime.datetime.now().isoformat() }
+                
+                with st.spinner('جاري حفظ المنتج في السحابة...'):
+                    success, result = add_product_to_db(product_data)
+                
+                if success:
+                    st.success(f"✅ تم حفظ المنتج '{name}' بنجاح في فرع '{branch_to_add}'!")
+                    st.balloons()
+                    st.cache_data.clear()
+                else:
+                    st.error(f"❌ حدث خطأ أثناء الحفظ: {result}")
 
 elif sidebar_option == "المنتجات التي قاربت على الانتهاء":
     st.header("📉 المنتجات التي قاربت على الانتهاء")
