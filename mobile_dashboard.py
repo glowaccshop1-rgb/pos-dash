@@ -531,10 +531,13 @@ elif sidebar_option == "حالة المخزون":
             st.dataframe(low_stock[['name', 'quantity', 'branch_name']], use_container_width=True)
         
         # البحث
-        search_term = st.text_input("بحث عن منتج:")
+        search_term = st.text_input("بحث عن منتج (الاسم أو الباركود):")
         df_display = df_products.copy()
         if search_term:
-            df_display = df_display[df_display['name'].str.contains(search_term, case=False)]
+            df_display = df_display[
+                df_display['name'].str.contains(search_term, case=False, na=False) |
+                df_display['barcode'].astype(str).str.contains(search_term, case=False, na=False)
+            ]
             
         # Reorder columns for editor
         cols = ['name', 'quantity', 'selling_price', 'branch_name', 'barcode']
@@ -617,7 +620,8 @@ elif sidebar_option == "إضافة منتج جديد":
             barcode = st.text_input("الباركود *")
 
         name = st.text_input("اسم المنتج *")
-        category = st.text_input("القسم / التصنيف")
+        product_type = st.text_input("نوع المنتج")
+        supplier = st.text_input("المورد")
         
         st.markdown("---")
         st.subheader("💰 الأسعار والتكلفة")
@@ -635,15 +639,27 @@ elif sidebar_option == "إضافة منتج جديد":
         with q1:
             quantity = st.number_input("الكمية الحالية", min_value=0, step=1)
         with q2:
-            min_quantity = st.number_input("حد الطلب (أدنى كمية)", min_value=0, step=1, value=5)
+            alert_limit = st.number_input("حد التنبيه (Alert Limit)", min_value=0, step=1, value=5)
             
         st.markdown("---")
-        st.subheader("🗓️ تاريخ الصلاحية (اختياري)")
+        st.subheader("🏷️ الخصومات")
         
-        has_expiry = st.checkbox("المنتج له تاريخ صلاحية؟")
-        expiry_date = None
-        if has_expiry:
-            expiry_date = st.date_input("تاريخ الانتهاء", min_value=datetime.date.today())
+        d1, d2 = st.columns(2)
+        with d1:
+            discount_amount = st.number_input("مبلغ الخصم", min_value=0.0, step=0.5, format="%.2f")
+        
+        d3, d4 = st.columns(2)
+        with d3:
+            discount_start = st.date_input("تاريخ بداية الخصم", value=None)
+        with d4:
+            discount_end = st.date_input("تاريخ نهاية الخصم", value=None)
+
+        st.markdown("**خصم الكمية**")
+        qd1, qd2 = st.columns(2)
+        with qd1:
+            quantity_discount_threshold = st.number_input("الكمية المطلوبة للخصم", min_value=0, step=1)
+        with qd2:
+            quantity_discount_amount = st.number_input("خصم القطعة الواحدة", min_value=0.0, step=0.5, format="%.2f")
 
         st.markdown("<br>", unsafe_allow_html=True)
         
@@ -653,7 +669,28 @@ elif sidebar_option == "إضافة منتج جديد":
             if not barcode or not name:
                 st.error("⚠️ يجب إدخال الباركود واسم المنتج.")
             else:
-                product_data = { "barcode": barcode, "name": name, "branch_name": branch_to_add, "cost_price": cost_price, "selling_price": selling_price, "quantity": quantity, "min_quantity": min_quantity, "category": category, "expiry_date": str(expiry_date) if expiry_date else None, "created_at": datetime.datetime.now().isoformat() }
+                # حساب الربح والسعر بعد الخصم
+                profit = selling_price - cost_price
+                discounted_price = selling_price - discount_amount if discount_amount else selling_price
+
+                product_data = { 
+                    "barcode": barcode, 
+                    "name": name, 
+                    "branch_name": branch_to_add, 
+                    "cost_price": cost_price, 
+                    "selling_price": selling_price, 
+                    "quantity": quantity, 
+                    "alert_limit": alert_limit, 
+                    "supplier": supplier,
+                    "discount_amount": discount_amount,
+                    "discount_start": str(discount_start) if discount_start else None,
+                    "discount_end": str(discount_end) if discount_end else None,
+                    "quantity_discount_threshold": quantity_discount_threshold,
+                    "quantity_discount_amount": quantity_discount_amount,
+                    "profit": profit,
+                    "discounted_price": discounted_price,
+                    "created_at": datetime.datetime.now().isoformat() 
+                }
                 
                 with st.spinner('جاري حفظ المنتج في السحابة...'):
                     success, result = add_product_to_db(product_data)
