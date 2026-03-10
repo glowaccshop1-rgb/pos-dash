@@ -430,24 +430,36 @@ def update_discount_products(discount_name, products_list):
         return False
 
 def update_product_quantity(barcode, branch_name, new_quantity):
-    """Updates product quantity in Supabase, handling duplicates."""
+    """
+    Updates product quantity in Supabase.
+    This function is designed to be robust: it finds all records for a given
+    barcode and branch, updates the first one, and deletes any duplicates to
+    enforce a single, authoritative record per product per branch.
+    """
     if not supabase: return False
     try:
-        # Fetch rows to handle duplicates
+        # Step 1: Find all records for the product in the specified branch.
+        # This handles cases where data might have been duplicated.
         response = supabase.table('products').select("id").eq('barcode', barcode).eq('branch_name', branch_name).execute()
         rows = response.data
         
         if not rows:
+            st.error(f"خطأ فادح: المنتج {barcode} في فرع {branch_name} موجود في الواجهة ولكنه غير موجود في قاعدة البيانات عند محاولة التحديث. قد يكون قد تم حذفه بواسطة عملية أخرى.", icon="🚨")
             return False
             
-        # Update the first row
-        first_id = rows[0]['id']
-        supabase.table('products').update({'quantity': new_quantity}).eq('id', first_id).execute()
+        # Step 2: Consolidate and update.
+        # We designate the first found record as the master record.
+        master_id = rows[0]['id']
+        update_response = supabase.table('products').update({'quantity': new_quantity}).eq('id', master_id).execute()
+        if not update_response.data:
+             st.error(f"فشل تحديث الكمية للمنتج {barcode}. قد تكون هناك مشكلة في الصلاحيات.", icon="🔒")
+             return False
         
-        # Delete duplicates if any (cleaning up data)
+        # Step 3: Clean up any duplicate records.
         if len(rows) > 1:
-            for row in rows[1:]:
-                supabase.table('products').delete().eq('id', row['id']).execute()
+            st.warning(f"⚠️ تم العثور على {len(rows)-1} سجلات مكررة للمنتج {barcode} في فرع {branch_name} وجاري حذفها لضمان دقة البيانات.", icon="🧹")
+            duplicate_ids = [row['id'] for row in rows[1:]]
+            supabase.table('products').delete().in_('id', duplicate_ids).execute()
                 
         return True
     except Exception as e:
